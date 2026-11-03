@@ -267,7 +267,25 @@ keyed.get('/api/state', async (c) => {
         GROUP BY created_by ORDER BY last DESC`
     )
     .all();
-  const knownPeople = [...new Set(people.map((p) => displayName(p.created_by, names)).filter(Boolean))];
+  // The names in PEOPLE (wrangler.jsonc) always come first, then anyone else
+  // who has typed in a new name. Matching ignores upper/lower case. Names left
+  // over from the old email login aren't offered.
+  const defaults = String(c.env.PEOPLE || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  const others = people
+    .filter((p) => !p.created_by.includes('@'))
+    .map((p) => p.created_by);
+  const knownPeople = [];
+  const seen = new Set();
+  for (const n of [...defaults, ...others]) {
+    const k = n.toLowerCase();
+    if (!seen.has(k)) {
+      seen.add(k);
+      knownPeople.push(n);
+    }
+  }
 
   let nextDeposit = null;
   if (settings.start_date) {

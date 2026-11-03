@@ -24,6 +24,8 @@
 
   "vars": {
     // Decides when "Monday" starts.
-    "TIMEZONE": "America/New_York"
+    "TIMEZONE": "America/New_York",
+    // Buttons on the "Who's using this phone?" screen, comma-separated.
+    "PEOPLE": "Rick,Megan"
   }
 }

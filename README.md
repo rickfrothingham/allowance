@@ -11,7 +11,7 @@ Anyone who has the link can use the app, so share it only with each other. If it
 - Every change to the balance is a row in the database: allowance deposits, money added, money spent.
 - Nothing runs on a timer. When anyone opens the app, it adds any Monday deposits that are missing. If nobody opens it for three weeks, all three deposits show up the next time someone does.
 - Add and Spend have a date field (defaults to today). Tap any entry in the history to change its date. Automatic Monday deposits can't be moved, since the schedule is worked out from them. Future dates aren't allowed.
-- Each phone asks "Who's using this phone?" once and shows that name next to its entries. It's for the history only, not security. On iPhone, the home-screen app keeps its own storage, so it asks once more there.
+- Each phone asks "Who's using this phone?" once (with Rick and Megan offered as buttons, set by `PEOPLE` in `wrangler.jsonc`) and shows that name next to its entries. It's for the history only, not security. On iPhone, the home-screen app keeps its own storage, so it asks once more there.
 - "Remove" hides an entry but keeps it in the database, so nothing is ever truly lost.
 - Changing the weekly amount only affects future Mondays.
 
