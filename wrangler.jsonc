@@ -4,15 +4,19 @@
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
 
-  // The web page lives in /public.
+  // /public holds only the icons. The page itself (src/page.html) is served
+  // by the Worker, and only at the secret /k/<APP_KEY>/ address.
   "assets": { "directory": "./public" },
+
+  // APP_KEY is NOT set here: it's a secret, set in the Cloudflare dashboard
+  // (Worker → Settings → Variables and Secrets, type "Secret"). See the README.
 
   // The database. No ID needed: Cloudflare creates it on the first deploy.
   "d1_databases": [{ "binding": "DB", "database_name": "allowance" }],
 
   // Public address: allowance.<your-subdomain>.workers.dev
   "workers_dev": true,
-  // No extra per-version test URLs: one address, one login gate.
+  // No extra per-version test URLs: one address.
   "preview_urls": false,
 
   // Keeps recent logs viewable in the Cloudflare dashboard.

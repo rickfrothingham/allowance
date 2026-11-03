@@ -8,14 +8,21 @@
 //     for three weeks, all three deposits appear the next time someone does.
 //   * Balance = sum of all rows that haven't been removed.
 //
-// Login is handled by Cloudflare Access, which sits in front of this app.
-// Access tells us who is signed in through the request header
-// `cf-access-authenticated-user-email`. If that header is missing, we refuse
-// the request, so the app fails closed if Access is ever turned off.
+// Access is a secret link instead of a login. The app only answers at
+//   https://allowance.<subdomain>.workers.dev/k/<APP_KEY>/
+// where APP_KEY is a long random string stored as a Cloudflare secret.
+// Everything else (including the bare address) gets a blank "Not found".
+// If APP_KEY isn't set, the app refuses everything, so it fails closed.
+//
+// Who made each entry is remembered per phone: the page asks once
+// ("Who's using this phone?") and sends the name with each request.
+// That's for the history display, not security: anyone with the link is trusted.
 
 import { Hono } from 'hono';
+import PAGE from './page.html';
 
 const app = new Hono();
+const keyed = new Hono(); // everything under /k/<key>/
 
 // ---------- Database setup (runs once per server instance) ----------
 
@@ -136,37 +143,103 @@ async function catchUpAllowance(db, settings, today) {
   if (inserts.length) await db.batch(inserts);
 }
 
-// ---------- Middleware: database + login check ----------
+// ---------- Secret-link check ----------
 
-app.use('/api/*', async (c, next) => {
-  let email = c.req.header('cf-access-authenticated-user-email');
+const MIN_KEY_LENGTH = 24;
 
-  // Local testing only: `.dev.vars` sets DEV_USER so the app runs without Access.
-  if (!email && c.env.DEV_USER) email = c.env.DEV_USER;
+// Compare in constant time so the key can't be guessed one character at a time.
+function keyMatches(given, expected) {
+  const enc = new TextEncoder();
+  const a = enc.encode(given || '');
+  const b = enc.encode(expected || '');
+  if (a.byteLength !== b.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(a, b);
+}
 
-  if (!email) {
-    return c.json(
-      {
-        error: 'not_signed_in',
-        message:
-          'Login is not set up yet. Turn on Cloudflare Access for this app (see the README), then reload.',
-      },
-      401
-    );
+function notFound(c) {
+  return c.text('Not found', 404);
+}
+
+app.use('/k/:key/*', async (c, next) => {
+  const expected = c.env.APP_KEY;
+  if (!expected || expected.length < MIN_KEY_LENGTH) {
+    return c.text('This app is locked: the APP_KEY secret is not set (see the README).', 503);
   }
-  c.set('email', email.toLowerCase());
-  await ensureSchema(c.env.DB);
+  if (!keyMatches(c.req.param('key'), expected)) return notFound(c);
   await next();
 });
 
+// /k/<key> without the trailing slash: add it, so the page's relative links work.
+app.get('/k/:key', (c) => {
+  if (!c.env.APP_KEY || !keyMatches(c.req.param('key'), c.env.APP_KEY)) return notFound(c);
+  return c.redirect(new URL(c.req.url).pathname + '/', 301);
+});
+
+// The name of whoever is using this phone, sent by the page as X-Who.
+function whoFrom(c) {
+  let who = '';
+  try {
+    who = decodeURIComponent(c.req.header('x-who') || '');
+  } catch {}
+  return who.trim().slice(0, 30);
+}
+
+keyed.use('/api/*', async (c, next) => {
+  await ensureSchema(c.env.DB);
+  c.set('who', whoFrom(c));
+  await next();
+});
+
+// ---------- Page and home-screen manifest ----------
+
+// Registered on the main app: a mounted sub-app can't match its own path with a trailing slash.
+app.get('/k/:key/', (c) =>
+  c.html(PAGE, 200, {
+    'cache-control': 'no-store',
+    // Don't send the secret URL to other sites if a link is ever added.
+    'referrer-policy': 'no-referrer',
+    'x-robots-tag': 'noindex, nofollow',
+  })
+);
+
+// Served from inside the secret path, with a relative start_url, so a
+// home-screen icon opens /k/<key>/ and the key comes along.
+keyed.get('/manifest.webmanifest', (c) =>
+  c.json(
+    {
+      name: 'Allowance',
+      short_name: 'Allowance',
+      start_url: './',
+      scope: './',
+      display: 'standalone',
+      background_color: '#f6f3ec',
+      theme_color: '#1f6f5c',
+      icons: [
+        { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+      ],
+    },
+    200,
+    { 'content-type': 'application/manifest+json', 'cache-control': 'no-store' }
+  )
+);
+
 // ---------- API ----------
 
+// Display name for whoever created an entry. Older entries (from when the app
+// used email login) stored an email address; newer ones store the name.
+function displayName(createdBy, names) {
+  if (!createdBy) return '';
+  if (createdBy === 'automatic') return 'automatic';
+  if (names[createdBy]) return names[createdBy];
+  return createdBy.includes('@') ? createdBy.split('@')[0] : createdBy;
+}
+
 // Everything the page needs in one call.
-app.get('/api/state', async (c) => {
+keyed.get('/api/state', async (c) => {
   const db = c.env.DB;
   const tz = c.env.TIMEZONE || 'America/New_York';
   const today = todayIn(tz);
-  const email = c.get('email');
 
   let settings = await getSettings(db);
   await catchUpAllowance(db, settings, today);
@@ -182,9 +255,19 @@ app.get('/api/state', async (c) => {
     )
     .all();
 
-  // Display names people chose for themselves (key 'name:<email>').
+  // Display names chosen back when the app used email login (key 'name:<email>').
   const names = {};
   for (const [k, v] of Object.entries(settings)) if (k.startsWith('name:')) names[k.slice(5)] = v;
+
+  // Names to offer on the "Who's using this phone?" screen: everyone who has made an entry.
+  const { results: people } = await db
+    .prepare(
+      `SELECT created_by, MAX(created_at) AS last FROM transactions
+        WHERE created_by IS NOT NULL AND created_by != 'automatic'
+        GROUP BY created_by ORDER BY last DESC`
+    )
+    .all();
+  const knownPeople = [...new Set(people.map((p) => displayName(p.created_by, names)).filter(Boolean))];
 
   let nextDeposit = null;
   if (settings.start_date) {
@@ -195,7 +278,7 @@ app.get('/api/state', async (c) => {
   return c.json({
     setup_done: !!settings.start_date,
     today,
-    me: { email, name: names[email] || '' },
+    known_people: knownPeople,
     child_name: settings.child_name || '',
     weekly_cents: parseInt(settings.weekly_cents || '0', 10),
     start_date: settings.start_date || null,
@@ -203,13 +286,13 @@ app.get('/api/state', async (c) => {
     balance_cents: balance.cents,
     transactions: rows.map((r) => ({
       ...r,
-      by: r.created_by === 'automatic' ? 'automatic' : names[r.created_by] || (r.created_by || '').split('@')[0],
+      by: displayName(r.created_by, names),
     })),
   });
 });
 
 // First-time setup.
-app.post('/api/setup', async (c) => {
+keyed.post('/api/setup', async (c) => {
   const db = c.env.DB;
   const settings = await getSettings(db);
   if (settings.start_date) return c.json({ error: 'Already set up.' }, 409);
@@ -226,7 +309,7 @@ app.post('/api/setup', async (c) => {
   if (!Number.isFinite(starting) || Math.abs(starting) > 10000000)
     return c.json({ error: 'Starting balance looks wrong.' }, 400);
 
-  const email = c.get('email');
+  const who = c.get('who');
   const tz = c.env.TIMEZONE || 'America/New_York';
   const stmts = [
     putSetting(db, 'child_name', childName),
@@ -240,7 +323,7 @@ app.post('/api/setup', async (c) => {
           `INSERT INTO transactions (date, amount_cents, note, kind, created_by, created_at)
            VALUES (?, ?, 'Starting balance', 'starting', ?, ?)`
         )
-        .bind(todayIn(tz), starting, email, new Date().toISOString())
+        .bind(todayIn(tz), starting, who || null, new Date().toISOString())
     );
   }
   await db.batch(stmts);
@@ -248,7 +331,7 @@ app.post('/api/setup', async (c) => {
 });
 
 // Add money or record spending.
-app.post('/api/transactions', async (c) => {
+keyed.post('/api/transactions', async (c) => {
   const body = await c.req.json();
   const cents = parseInt(body.amount_cents, 10);
   const note = String(body.note || '').trim().slice(0, 100);
@@ -266,7 +349,7 @@ app.post('/api/transactions', async (c) => {
       `INSERT INTO transactions (date, amount_cents, note, kind, created_by, created_at)
        VALUES (?, ?, ?, 'manual', ?, ?)`
     )
-    .bind(date, cents, note, c.get('email'), new Date().toISOString())
+    .bind(date, cents, note, c.get('who') || null, new Date().toISOString())
     .run();
   return c.json({ ok: true });
 });
@@ -274,7 +357,7 @@ app.post('/api/transactions', async (c) => {
 // Change the date of an entry. Automatic Monday deposits can't be moved:
 // the next deposit is worked out from the last one, so moving one would
 // throw the schedule off.
-app.patch('/api/transactions/:id', async (c) => {
+keyed.patch('/api/transactions/:id', async (c) => {
   const db = c.env.DB;
   const id = parseInt(c.req.param('id'), 10);
   const body = await c.req.json();
@@ -293,23 +376,23 @@ app.patch('/api/transactions/:id', async (c) => {
 
   await db
     .prepare('UPDATE transactions SET date = ?, edited_at = ?, edited_by = ? WHERE id = ?')
-    .bind(date, new Date().toISOString(), c.get('email'), id)
+    .bind(date, new Date().toISOString(), c.get('who') || null, id)
     .run();
   return c.json({ ok: true });
 });
 
 // Remove an entry. It's hidden, not erased, so nothing is ever truly lost.
-app.delete('/api/transactions/:id', async (c) => {
+keyed.delete('/api/transactions/:id', async (c) => {
   const id = parseInt(c.req.param('id'), 10);
   await c.env.DB
     .prepare('UPDATE transactions SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL')
-    .bind(new Date().toISOString(), c.get('email'), id)
+    .bind(new Date().toISOString(), c.get('who') || null, id)
     .run();
   return c.json({ ok: true });
 });
 
-// Change settings: child's name, weekly amount, and your own display name.
-app.put('/api/settings', async (c) => {
+// Change settings: child's name and weekly amount.
+keyed.put('/api/settings', async (c) => {
   const db = c.env.DB;
   const body = await c.req.json();
   const stmts = [];
@@ -326,14 +409,13 @@ app.put('/api/settings', async (c) => {
     await catchUpAllowance(db, await getSettings(db), todayIn(tz));
     stmts.push(putSetting(db, 'weekly_cents', w));
   }
-  if (body.my_name !== undefined) {
-    stmts.push(putSetting(db, 'name:' + c.get('email'), String(body.my_name).trim().slice(0, 30)));
-  }
   if (stmts.length) await db.batch(stmts);
   return c.json({ ok: true });
 });
 
-app.notFound((c) => c.json({ error: 'Not found' }, 404));
+app.route('/k/:key', keyed);
+
+app.notFound(notFound);
 app.onError((err, c) => {
   console.error(err);
   return c.json({ error: 'Something went wrong on the server.' }, 500);
