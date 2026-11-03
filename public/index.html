@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Allowance</title>
+<meta name="theme-color" content="#1f6f5c">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon-512.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Allowance">
+<style>
+  :root {
+    --bg: #f6f3ec;
+    --card: #ffffff;
+    --ink: #1d2422;
+    --muted: #6b7470;
+    --line: #e6e1d6;
+    --brand: #1f6f5c;
+    --brand-ink: #ffffff;
+    --in: #1f7a4d;
+    --out: #b5442b;
+    --radius: 18px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121614; --card: #1b201e; --ink: #eef1ef; --muted: #9aa39f;
+      --line: #2a312e; --brand: #3fa58a; --brand-ink: #0d1412; --in: #5cc28d; --out: #ef8a71;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 16px 48px; }
+  h1 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 8px 0 0; text-align: center; letter-spacing: .02em; }
+  .balance { font-size: 64px; font-weight: 700; text-align: center; margin: 4px 0 2px;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .balance.negative { color: var(--out); }
+  .next { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 14px; padding: 14px 16px; }
+  .big { font-size: 18px; font-weight: 600; padding: 18px 12px; }
+  .add { background: var(--brand); color: var(--brand-ink); }
+  .spend { background: var(--card); color: var(--ink); border: 1.5px solid var(--line); }
+  .card { background: var(--card); border-radius: var(--radius); border: 1px solid var(--line); }
+  .section-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; margin: 0 4px 8px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.tx { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line); }
+  li.tx:first-child { border-top: 0; }
+  .tx-main { flex: 1; min-width: 0; }
+  .tx-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tx-meta { font-size: 13px; color: var(--muted); }
+  .tx-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tx-amt.in { color: var(--in); } .tx-amt.out { color: var(--out); }
+  .tx-del { background: none; color: var(--muted); padding: 6px 8px; font-size: 13px; border-radius: 8px; }
+  .tx-del.confirm { background: var(--out); color: #fff; }
+  .empty { padding: 20px; text-align: center; color: var(--muted); }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 14px 0 6px; }
+  input { width: 100%; font: inherit; font-size: 18px; padding: 12px 14px; border-radius: 12px;
+    border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); }
+  input:focus { outline: 2px solid var(--brand); outline-offset: 0; border-color: transparent; }
+  .money { position: relative; }
+  .money span { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 18px; }
+  .money input { padding-left: 30px; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .primary { width: 100%; margin-top: 20px; background: var(--brand); color: var(--brand-ink); font-weight: 600; font-size: 17px; }
+  .ghost { width: 100%; margin-top: 8px; background: none; color: var(--muted); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { padding: 8px 14px; border-radius: 999px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); font-size: 15px; }
+  .error { color: var(--out); font-size: 14px; margin-top: 12px; min-height: 1em; }
+  .pad { padding: 18px; }
+  details { margin-top: 24px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 8px 4px; }
+  .who { text-align: center; font-size: 12px; color: var(--muted); margin-top: 28px; }
+  /* Bottom sheet for add / spend */
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
+  .sheet-bg.open { display: flex; }
+  .sheet { width: 100%; max-width: 480px; background: var(--card); border-radius: 22px 22px 0 0;
+    padding: 20px 18px max(20px, env(safe-area-inset-bottom)); }
+  .sheet h2 { margin: 0 0 4px; font-size: 20px; }
+  .center { text-align: center; }
+  .loading { text-align: center; color: var(--muted); padding: 80px 0; }
+</style>
+</head>
+<body>
+<main id="app"><div class="loading">Loading…</div></main>
+
+<div class="sheet-bg" id="sheetBg">
+  <form class="sheet" id="sheet" autocomplete="off">
+    <h2 id="sheetTitle">Add money</h2>
+    <label for="amt">Amount</label>
+    <div class="money"><span>$</span><input id="amt" inputmode="decimal" placeholder="0.00" required></div>
+    <div class="chips" id="chips"></div>
+    <label for="note">What for? <span style="opacity:.7">(optional)</span></label>
+    <input id="note" maxlength="100" placeholder="">
+    <div class="error" id="sheetErr"></div>
+    <button class="primary" type="submit" id="sheetSave">Save</button>
+    <button class="ghost" type="button" id="sheetCancel">Cancel</button>
+  </form>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const app = $('#app');
+let state = null;
+let sheetMode = 'add';
+
+// ---------- helpers ----------
+function money(cents, withSign) {
+  const sign = cents < 0 ? '−' : (withSign ? '+' : '');
+  const abs = Math.abs(cents) / 100;
+  return sign + '$' + abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function toCents(str) {
+  const n = Number(String(str).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+function niceDate(ymd) {
+  const d = new Date(ymd + 'T12:00:00');
+  const today = state && state.today;
+  if (ymd === today) return 'Today';
+  const opts = { weekday: 'short', month: 'short', day: 'numeric' };
+  if (today && ymd.slice(0, 4) !== today.slice(0, 4)) opts.year = 'numeric';
+  return d.toLocaleDateString('en-US', opts);
+}
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = {};
+  try { data = await res.json(); } catch {}
+  if (!res.ok) throw new Error(data.message || data.error || ('Error ' + res.status));
+  return data;
+}
+function nextMonday(fromYmd, includeToday) {
+  const d = new Date(fromYmd + 'T12:00:00');
+  let add = (8 - d.getDay()) % 7;
+  if (add === 0 && !includeToday) add = 7;
+  d.setDate(d.getDate() + add);
+  return d.toISOString().slice(0, 10);
+}
+
+// ---------- load + render ----------
+async function load() {
+  try {
+    state = await api('GET', '/api/state');
+    state.setup_done ? renderMain() : renderSetup();
+  } catch (e) {
+    app.replaceChildren(el('div', { class: 'card pad center', style: 'margin-top:40px' },
+      el('p', {}, e.message), el('button', { class: 'primary', onclick: load }, 'Try again')));
+  }
+}
+
+function renderSetup() {
+  const today = state.today;
+  const err = el('div', { class: 'error' });
+  const form = el('form', { class: 'card pad', style: 'margin-top:16px' },
+    el('h2', { style: 'margin:0' }, 'Set up the allowance'),
+    el('p', { class: 'hint' }, 'You only do this once. Everything can be changed later except the start date.'),
+    el('label', { for: 's_name' }, "Child's name"),
+    el('input', { id: 's_name', required: '', maxlength: '40' }),
+    el('label', { for: 's_weekly' }, 'Weekly allowance'),
+    el('div', { class: 'money' }, el('span', {}, '$'), el('input', { id: 's_weekly', inputmode: 'decimal', value: '7.00' })),
+    el('label', { for: 's_start' }, 'Current balance'),
+    el('div', { class: 'money' }, el('span', {}, '$'), el('input', { id: 's_start', inputmode: 'decimal', value: '0.00' })),
+    el('div', { class: 'hint' }, 'What she has right now, including this week’s allowance if she already got it.'),
+    el('label', { for: 's_date' }, 'First automatic deposit (a Monday)'),
+    el('input', { id: 's_date', type: 'date', value: nextMonday(today, false), step: '7' }),
+    el('div', { class: 'hint' }, 'From this Monday on, the weekly amount is added automatically.'),
+    err,
+    el('button', { class: 'primary', type: 'submit' }, 'Start')
+  );
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    err.textContent = '';
+    const date = $('#s_date').value;
+    if (new Date(date + 'T12:00:00').getDay() !== 1) { err.textContent = 'Pick a Monday for the first deposit.'; return; }
+    try {
+      await api('POST', '/api/setup', {
+        child_name: $('#s_name').value,
+        weekly_cents: toCents($('#s_weekly').value),
+        starting_cents: toCents($('#s_start').value || '0'),
+        start_date: date,
+      });
+      load();
+    } catch (e) { err.textContent = e.message; }
+  });
+  app.replaceChildren(form);
+}
+
+function renderMain() {
+  const s = state;
+  document.title = s.child_name + "'s allowance";
+  const nextTxt = s.next_deposit
+    ? `+${money(s.weekly_cents)} on ${new Date(s.next_deposit + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`
+    : '';
+
+  const list = el('ul');
+  if (!s.transactions.length) list.append(el('li', { class: 'empty' }, 'Nothing yet.'));
+  for (const t of s.transactions) {
+    const del = el('button', { class: 'tx-del', 'aria-label': 'Remove' }, 'Remove');
+    let armed = false, timer;
+    del.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true; del.textContent = 'Sure?'; del.classList.add('confirm');
+        timer = setTimeout(() => { armed = false; del.textContent = 'Remove'; del.classList.remove('confirm'); }, 3000);
+        return;
+      }
+      clearTimeout(timer);
+      del.disabled = true;
+      try { await api('DELETE', '/api/transactions/' + t.id); load(); } catch (e) { alertInline(e.message); }
+    });
+    list.append(el('li', { class: 'tx' },
+      el('div', { class: 'tx-main' },
+        el('div', { class: 'tx-note' }, t.note || (t.amount_cents > 0 ? 'Added' : 'Spent')),
+        el('div', { class: 'tx-meta' }, niceDate(t.date) + (t.by && t.by !== 'automatic' ? ' · ' + t.by : ''))),
+      el('div', { class: 'tx-amt ' + (t.amount_cents > 0 ? 'in' : 'out') }, money(t.amount_cents, true)),
+      del));
+  }
+
+  // Settings
+  const setErr = el('div', { class: 'error' });
+  const settings = el('details', {},
+    el('summary', {}, 'Settings'),
+    el('form', { class: 'card pad', id: 'settingsForm' },
+      el('label', { for: 'set_child' }, "Child's name"),
+      el('input', { id: 'set_child', value: s.child_name, maxlength: '40' }),
+      el('label', { for: 'set_weekly' }, 'Weekly allowance'),
+      el('div', { class: 'money' }, el('span', {}, '$'), el('input', { id: 'set_weekly', inputmode: 'decimal', value: (s.weekly_cents / 100).toFixed(2) })),
+      el('div', { class: 'hint' }, 'A change applies from the next Monday on. Past deposits stay as they were.'),
+      el('label', { for: 'set_me' }, 'Your name (shown next to your entries)'),
+      el('input', { id: 'set_me', value: s.me.name, placeholder: s.me.email.split('@')[0], maxlength: '30' }),
+      setErr,
+      el('button', { class: 'primary', type: 'submit' }, 'Save settings')));
+  settings.querySelector('form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    setErr.textContent = '';
+    try {
+      await api('PUT', '/api/settings', {
+        child_name: $('#set_child').value,
+        weekly_cents: toCents($('#set_weekly').value),
+        my_name: $('#set_me').value,
+      });
+      load();
+    } catch (e) { setErr.textContent = e.message; }
+  });
+
+  app.replaceChildren(
+    el('h1', {}, s.child_name + "'s money"),
+    el('div', { class: 'balance' + (s.balance_cents < 0 ? ' negative' : '') }, money(s.balance_cents)),
+    el('div', { class: 'next' }, nextTxt),
+    el('div', { class: 'actions' },
+      el('button', { class: 'big add', onclick: () => openSheet('add') }, '+ Add'),
+      el('button', { class: 'big spend', onclick: () => openSheet('spend') }, '− Spend')),
+    el('div', { class: 'section-title' }, 'History'),
+    el('div', { class: 'card' }, list),
+    settings,
+    el('div', { class: 'who' }, 'Signed in as ' + s.me.email)
+  );
+}
+
+function alertInline(msg) {
+  const box = el('div', { class: 'error center' }, msg);
+  app.prepend(box);
+  setTimeout(() => box.remove(), 4000);
+}
+
+// ---------- add / spend sheet ----------
+const sheetBg = $('#sheetBg');
+function openSheet(mode) {
+  sheetMode = mode;
+  $('#sheetTitle').textContent = mode === 'add' ? 'Add money' : 'Record spending';
+  $('#note').placeholder = mode === 'add' ? 'e.g. Birthday money from Grandma' : 'e.g. Pokémon cards';
+  $('#amt').value = ''; $('#note').value = ''; $('#sheetErr').textContent = '';
+  const chips = $('#chips'); chips.replaceChildren();
+  for (const v of [1, 2, 5, 10, 20]) {
+    chips.append(el('button', { type: 'button', class: 'chip', onclick: () => { $('#amt').value = v.toFixed(2); } }, '$' + v));
+  }
+  sheetBg.classList.add('open');
+  setTimeout(() => $('#amt').focus(), 50);
+}
+function closeSheet() { sheetBg.classList.remove('open'); }
+$('#sheetCancel').addEventListener('click', closeSheet);
+sheetBg.addEventListener('click', (e) => { if (e.target === sheetBg) closeSheet(); });
+$('#sheet').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const cents = toCents($('#amt').value);
+  if (!(cents > 0)) { $('#sheetErr').textContent = 'Enter an amount.'; return; }
+  const btn = $('#sheetSave'); btn.disabled = true;
+  try {
+    await api('POST', '/api/transactions', {
+      amount_cents: sheetMode === 'add' ? cents : -cents,
+      note: $('#note').value,
+    });
+    closeSheet();
+    load();
+  } catch (e) { $('#sheetErr').textContent = e.message; }
+  finally { btn.disabled = false; }
+});
+
+// Refresh when the app comes back to the foreground (e.g. the other parent made a change).
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !sheetBg.classList.contains('open')) load(); });
+
+load();
+</script>
+</body>
+</html>

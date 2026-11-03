@@ -1,0 +1,25 @@
+{
+  // Cloudflare reads this file on every deploy.
+  "name": "allowance",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+
+  // The web page lives in /public.
+  "assets": { "directory": "./public" },
+
+  // The database. No ID needed: Cloudflare creates it on the first deploy.
+  "d1_databases": [{ "binding": "DB", "database_name": "allowance" }],
+
+  // Public address: allowance.<your-subdomain>.workers.dev
+  "workers_dev": true,
+  // No extra per-version test URLs: one address, one login gate.
+  "preview_urls": false,
+
+  // Keeps recent logs viewable in the Cloudflare dashboard.
+  "observability": { "enabled": true },
+
+  "vars": {
+    // Decides when "Monday" starts.
+    "TIMEZONE": "America/New_York"
+  }
+}
