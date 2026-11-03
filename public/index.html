@@ -81,6 +81,11 @@
     padding: 20px 18px max(20px, env(safe-area-inset-bottom)); }
   .sheet h2 { margin: 0 0 4px; font-size: 20px; }
   .center { text-align: center; }
+  .tx-main.editable { cursor: pointer; }
+  .tx-edit { opacity: .6; font-size: 12px; }
+  .sheet-summary { color: var(--muted); margin: 4px 0 0; }
+  .hidden { display: none !important; }
+  input[type=date] { min-height: 50px; -webkit-appearance: none; appearance: none; }
   .loading { text-align: center; color: var(--muted); padding: 80px 0; }
 </style>
 </head>
@@ -90,11 +95,16 @@
 <div class="sheet-bg" id="sheetBg">
   <form class="sheet" id="sheet" autocomplete="off">
     <h2 id="sheetTitle">Add money</h2>
-    <label for="amt">Amount</label>
-    <div class="money"><span>$</span><input id="amt" inputmode="decimal" placeholder="0.00" required></div>
-    <div class="chips" id="chips"></div>
-    <label for="note">What for? <span style="opacity:.7">(optional)</span></label>
-    <input id="note" maxlength="100" placeholder="">
+    <p class="sheet-summary hidden" id="sheetSummary"></p>
+    <div id="amtFields">
+      <label for="amt">Amount</label>
+      <div class="money"><span>$</span><input id="amt" inputmode="decimal" placeholder="0.00"></div>
+      <div class="chips" id="chips"></div>
+      <label for="note">What for? <span style="opacity:.7">(optional)</span></label>
+      <input id="note" maxlength="100" placeholder="">
+    </div>
+    <label for="txDate">Date</label>
+    <input id="txDate" type="date" required>
     <div class="error" id="sheetErr"></div>
     <button class="primary" type="submit" id="sheetSave">Save</button>
     <button class="ghost" type="button" id="sheetCancel">Cancel</button>
@@ -105,7 +115,8 @@
 const $ = (s) => document.querySelector(s);
 const app = $('#app');
 let state = null;
-let sheetMode = 'add';
+let sheetMode = 'add';   // 'add', 'spend' or 'edit'
+let editing = null;      // the entry being re-dated, in 'edit' mode
 
 // ---------- helpers ----------
 function money(cents, withSign) {
@@ -224,10 +235,22 @@ function renderMain() {
       del.disabled = true;
       try { await api('DELETE', '/api/transactions/' + t.id); load(); } catch (e) { alertInline(e.message); }
     });
+    // Automatic Monday deposits keep their date; everything else can be re-dated by tapping it.
+    const canEdit = t.kind !== 'allowance';
+    const main = el('div', { class: 'tx-main' + (canEdit ? ' editable' : '') },
+      el('div', { class: 'tx-note' }, t.note || (t.amount_cents > 0 ? 'Added' : 'Spent')),
+      el('div', { class: 'tx-meta' },
+        niceDate(t.date) + (t.by && t.by !== 'automatic' ? ' · ' + t.by : ''),
+        canEdit ? el('span', { class: 'tx-edit' }, ' ✎') : null));
+    if (canEdit) {
+      main.setAttribute('role', 'button');
+      main.setAttribute('tabindex', '0');
+      main.setAttribute('aria-label', 'Change date');
+      main.addEventListener('click', () => openSheet('edit', t));
+      main.addEventListener('keydown', (e) => { if (e.key === 'Enter') openSheet('edit', t); });
+    }
     list.append(el('li', { class: 'tx' },
-      el('div', { class: 'tx-main' },
-        el('div', { class: 'tx-note' }, t.note || (t.amount_cents > 0 ? 'Added' : 'Spent')),
-        el('div', { class: 'tx-meta' }, niceDate(t.date) + (t.by && t.by !== 'automatic' ? ' · ' + t.by : ''))),
+      main,
       el('div', { class: 'tx-amt ' + (t.amount_cents > 0 ? 'in' : 'out') }, money(t.amount_cents, true)),
       del));
   }
@@ -281,8 +304,27 @@ function alertInline(msg) {
 
 // ---------- add / spend sheet ----------
 const sheetBg = $('#sheetBg');
-function openSheet(mode) {
+function openSheet(mode, tx) {
   sheetMode = mode;
+  editing = tx || null;
+  $('#sheetErr').textContent = '';
+  const dateInput = $('#txDate');
+  dateInput.max = state.today;
+  dateInput.min = '2000-01-01';
+
+  const isEdit = mode === 'edit';
+  $('#amtFields').classList.toggle('hidden', isEdit);
+  $('#sheetSummary').classList.toggle('hidden', !isEdit);
+  $('#amt').required = !isEdit;
+  if (isEdit) {
+    $('#sheetTitle').textContent = 'Change date';
+    $('#sheetSummary').textContent = money(tx.amount_cents, true) + ' · ' + (tx.note || (tx.amount_cents > 0 ? 'Added' : 'Spent'));
+    dateInput.value = tx.date;
+    sheetBg.classList.add('open');
+    return;
+  }
+
+  dateInput.value = state.today;
   $('#sheetTitle').textContent = mode === 'add' ? 'Add money' : 'Record spending';
   $('#note').placeholder = mode === 'add' ? 'e.g. Birthday money from Grandma' : 'e.g. Pokémon cards';
   $('#amt').value = ''; $('#note').value = ''; $('#sheetErr').textContent = '';
@@ -298,14 +340,22 @@ $('#sheetCancel').addEventListener('click', closeSheet);
 sheetBg.addEventListener('click', (e) => { if (e.target === sheetBg) closeSheet(); });
 $('#sheet').addEventListener('submit', async (ev) => {
   ev.preventDefault();
+  const date = $('#txDate').value;
+  if (!date) { $('#sheetErr').textContent = 'Pick a date.'; return; }
+  if (date > state.today) { $('#sheetErr').textContent = 'The date can’t be in the future.'; return; }
   const cents = toCents($('#amt').value);
-  if (!(cents > 0)) { $('#sheetErr').textContent = 'Enter an amount.'; return; }
+  if (sheetMode !== 'edit' && !(cents > 0)) { $('#sheetErr').textContent = 'Enter an amount.'; return; }
   const btn = $('#sheetSave'); btn.disabled = true;
   try {
-    await api('POST', '/api/transactions', {
-      amount_cents: sheetMode === 'add' ? cents : -cents,
-      note: $('#note').value,
-    });
+    if (sheetMode === 'edit') {
+      await api('PATCH', '/api/transactions/' + editing.id, { date });
+    } else {
+      await api('POST', '/api/transactions', {
+        amount_cents: sheetMode === 'add' ? cents : -cents,
+        note: $('#note').value,
+        date,
+      });
+    }
     closeSheet();
     load();
   } catch (e) { $('#sheetErr').textContent = e.message; }

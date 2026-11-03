@@ -41,10 +41,26 @@ const SCHEMA = [
      ON transactions(date) WHERE kind = 'allowance'`,
 ];
 
+// Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+// EXISTS", so we try each one and ignore the "duplicate column" error.
+const ADDED_COLUMNS = [
+  'ALTER TABLE transactions ADD COLUMN edited_at TEXT',
+  'ALTER TABLE transactions ADD COLUMN edited_by TEXT',
+];
+
 let schemaReady = null;
 function ensureSchema(db) {
   if (!schemaReady) {
-    schemaReady = db.batch(SCHEMA.map((sql) => db.prepare(sql))).catch((err) => {
+    schemaReady = (async () => {
+      await db.batch(SCHEMA.map((sql) => db.prepare(sql)));
+      for (const sql of ADDED_COLUMNS) {
+        try {
+          await db.prepare(sql).run();
+        } catch (err) {
+          if (!/duplicate column/i.test(String(err && err.message))) throw err;
+        }
+      }
+    })().catch((err) => {
       schemaReady = null;
       throw err;
     });
@@ -64,6 +80,18 @@ function addDays(ymd, days) {
   const d = new Date(ymd + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+function isValidDate(ymd) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const d = new Date(ymd + 'T00:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === ymd;
+}
+// A transaction date has to be a real date, not in the future, and not absurdly old.
+function checkTxDate(ymd, today) {
+  if (!isValidDate(ymd)) return 'That date is not valid.';
+  if (ymd > today) return 'The date can’t be in the future.';
+  if (ymd < '2000-01-01') return 'That date is too far in the past.';
+  return null;
 }
 function isMonday(ymd) {
   return /^\d{4}-\d{2}-\d{2}$/.test(ymd) && new Date(ymd + 'T00:00:00Z').getUTCDay() === 1;
@@ -228,12 +256,44 @@ app.post('/api/transactions', async (c) => {
     return c.json({ error: 'Enter an amount between $0.01 and $1,000.' }, 400);
 
   const tz = c.env.TIMEZONE || 'America/New_York';
+  const today = todayIn(tz);
+  const date = body.date ? String(body.date) : today;
+  const dateErr = checkTxDate(date, today);
+  if (dateErr) return c.json({ error: dateErr }, 400);
+
   await c.env.DB
     .prepare(
       `INSERT INTO transactions (date, amount_cents, note, kind, created_by, created_at)
        VALUES (?, ?, ?, 'manual', ?, ?)`
     )
-    .bind(todayIn(tz), cents, note, c.get('email'), new Date().toISOString())
+    .bind(date, cents, note, c.get('email'), new Date().toISOString())
+    .run();
+  return c.json({ ok: true });
+});
+
+// Change the date of an entry. Automatic Monday deposits can't be moved:
+// the next deposit is worked out from the last one, so moving one would
+// throw the schedule off.
+app.patch('/api/transactions/:id', async (c) => {
+  const db = c.env.DB;
+  const id = parseInt(c.req.param('id'), 10);
+  const body = await c.req.json();
+  const tz = c.env.TIMEZONE || 'America/New_York';
+  const date = String(body.date || '');
+  const dateErr = checkTxDate(date, todayIn(tz));
+  if (dateErr) return c.json({ error: dateErr }, 400);
+
+  const row = await db
+    .prepare('SELECT kind FROM transactions WHERE id = ? AND deleted_at IS NULL')
+    .bind(id)
+    .first();
+  if (!row) return c.json({ error: 'That entry no longer exists.' }, 404);
+  if (row.kind === 'allowance')
+    return c.json({ error: 'Automatic Monday deposits keep their date.' }, 400);
+
+  await db
+    .prepare('UPDATE transactions SET date = ?, edited_at = ?, edited_by = ? WHERE id = ?')
+    .bind(date, new Date().toISOString(), c.get('email'), id)
     .run();
   return c.json({ ok: true });
 });

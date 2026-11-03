@@ -8,6 +8,7 @@ Runs on Cloudflare Workers with a D1 database. Login is handled by Cloudflare Ac
 
 - Every change to the balance is a row in the database: allowance deposits, money added, money spent.
 - Nothing runs on a timer. When anyone opens the app, it adds any Monday deposits that are missing. If nobody opens it for three weeks, all three deposits show up the next time someone does.
+- Add and Spend have a date field (defaults to today). Tap any entry in the history to change its date. Automatic Monday deposits can't be moved, since the schedule is worked out from them. Future dates aren't allowed.
 - "Remove" hides an entry but keeps it in the database, so nothing is ever truly lost.
 - Changing the weekly amount only affects future Mondays.
 
